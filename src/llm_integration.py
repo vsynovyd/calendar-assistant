@@ -1,6 +1,8 @@
 # llm_integration.py
 
-import openai
-from config import OPENAI_API_KEY
+from openai import OpenAI
+from dotenv import load_dotenv
+import os
 
-openai.api_key = OPENAI_API_KEY
+load_dotenv()
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
