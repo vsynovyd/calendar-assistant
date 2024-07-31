@@ -10,6 +10,65 @@ import re
 # Set OpenAI API key
 openai.api_key = OPENAI_API_KEY
 
+
+
+def schedule_event(query):
+    """
+    Schedule an event based on the user's query.
+
+    Parameters:
+    query (str): The user's query to determine the name, the time and the length for the event.
+
+    Returns: 
+    str: A success result, or inability to schedule an event due to an overlap.
+    """
+    calendar = OutlookCalendar(CLIENT_ID, CLIENT_SECRET, TENANT_ID)
+    
+    # Extract event details from the query
+    event_name = extract_event_name(query)
+    event_time = parse_specific_datetime(query)
+    event_length = extract_event_length(query)
+    
+    # If any required information is missing, ask the user
+    if not event_name:
+        return "Please provide a name for the event."
+    if not event_time:
+        return "Please specify the date and time for the event."
+    if not event_length:
+        return "Please specify the length of the event in minutes."
+    
+    # Check for conflicts
+    end_time = event_time + timedelta(minutes=event_length)
+    events = calendar.get_calendar_events(event_time.isoformat(), end_time.isoformat())
+    
+    if events:
+        return f"There's already an event scheduled at {event_time}. Please choose a different time."
+    
+    # Schedule the event
+    success = calendar.create_event(event_name, event_time, end_time)
+    
+    if success:
+        return f"Successfully scheduled '{event_name}' on {event_time.strftime('%Y-%m-%d %H:%M')} for {event_length} minutes."
+    else:
+        return "Failed to schedule the event. Please try again."
+
+def extract_event_name(query):
+    # Implement logic to extract event name from query
+    # This is a placeholder implementation
+    name_match = re.search(r'"([^"]*)"', query)
+    return name_match.group(1) if name_match else None
+
+def extract_event_length(query):
+    # Implement logic to extract event length from query
+    # This is a placeholder implementation
+    length_match = re.search(r'(\d+)\s*(?:minute|min|hour|hr)', query, re.IGNORECASE)
+    if length_match:
+        length = int(length_match.group(1))
+        if 'hour' in length_match.group().lower():
+            length *= 60
+        return length
+    return None
+
 def get_calendar_summary(query):
     """
     Fetch calendar events based on the user's query and return a summary.
@@ -23,7 +82,7 @@ def get_calendar_summary(query):
     calendar = OutlookCalendar(CLIENT_ID, CLIENT_SECRET, TENANT_ID)
 
     # Determine the time range based on the query
-    start_date, end_date = parse_data_from_query(query)
+    start_date, end_date = parse_data(query)
     
     if not start_date or not end_date:
         return "Could not determine the date range from your query. Please specify a valid time range."
@@ -108,9 +167,8 @@ def find_available_slots(events, meeting_length):
     list: A list of available time slots.
     """
 
-    # assume that the work day is from 9am to 5pm
+    # assume that the work day starts at 9am
     workday_start = datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
-    workday_end = datetime.now().replace(hour=17, minute=0, second=0, microsecond=0)
 
     available_slots = []
     current_time = workday_start
@@ -122,6 +180,10 @@ def find_available_slots(events, meeting_length):
         if current_time + timedelta(minutes=meeting_length) <= event_start:
             available_slots.append({"start": current_time, "end": current_time + timedelta(minutes=meeting_length)})
         current_time = event_end
+
+        # Stop suggesting slots after 5 PM
+        if current_time.time() >= datetime.now().replace(hour=17, minute=0, second=0, microsecond=0).time():
+            break
 
     return available_slots
 
@@ -333,6 +395,23 @@ tools = [
                     "query": {
                         "type": "string",
                         "description": "The user's query to cancel meetings."
+                    }
+                },
+                "required": ["query"]
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "schedule_event",
+            "description": "Schedule an event based on the user's query.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The user's query to schedule an event."
                     }
                 },
                 "required": ["query"]
