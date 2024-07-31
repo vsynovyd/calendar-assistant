@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timedelta
 from config import OPENAI_API_KEY, CLIENT_ID, CLIENT_SECRET, TENANT_ID
 from calendar_integration import OutlookCalendar
+import re
 
 # Set OpenAI API key
 openai.api_key = OPENAI_API_KEY
@@ -32,6 +33,7 @@ def get_calendar_summary(query):
     return events_str
 
 
+
 def suggest_meeting_time(query, meeting_length):
     """
     Suggests a meeting time based on user's availability.
@@ -47,7 +49,7 @@ def suggest_meeting_time(query, meeting_length):
     calendar = OutlookCalendar(CLIENT_ID, CLIENT_SECRET, TENANT_ID)
     
     # determine the date based on the query
-    target_date, _ = parse_data_from_query(query)
+    target_date, _ = parse_data(query)
     if not target_date:
         return "I couldn't find a date in your query. Please try again."
     
@@ -63,7 +65,7 @@ def suggest_meeting_time(query, meeting_length):
 
 
 
-def parse_data_from_query(query):
+def parse_data(query):
     """
     Parse the data from the user's query.
 
@@ -124,6 +126,140 @@ def find_available_slots(events, meeting_length):
     return available_slots
 
 
+def reschedule_meeting(query, meeting_id):
+    """
+    Reschedule a meeting based on the user's query.
+
+    Parameters:
+    query (str): The user's query to determine the new date/time for the meeting.
+    meeting_id (str): The ID of the meeting to be rescheduled.
+
+    Returns:
+    str: A message confirming the rescheduling or suggesting the best time.
+    """
+    calendar = OutlookCalendar(CLIENT_ID, CLIENT_SECRET, TENANT_ID)
+    
+    # Check if the query contains a specific date and time
+    specific_datetime = parse_specific_datetime(query)
+    
+    if specific_datetime:
+        # Reschedule to the specific date and time
+        success = calendar.update_event(meeting_id, start_time=specific_datetime)
+        if success:
+            return f"Meeting rescheduled to {specific_datetime.strftime('%Y-%m-%d %H:%M')}."
+        else:
+            return "Failed to reschedule the meeting. Please try again."
+    else:
+        # Analyze the best time for the meeting
+        target_date, _ = parse_data(query)
+        if not target_date:
+            return "I couldn't determine a date from your query. Please try again."
+        
+        events = calendar.get_calendar_events(target_date.isoformat(), (target_date + timedelta(days=1)).isoformat())
+        available_slots = find_available_slots(events, 60)  # Assuming 1-hour meeting
+        
+        if available_slots:
+            best_slot = available_slots[0]
+            success = calendar.update_event(meeting_id, start_time=best_slot['start'])
+            if success:
+                return f"Meeting rescheduled to the best available time: {best_slot['start'].strftime('%Y-%m-%d %H:%M')}."
+            else:
+                return "Failed to reschedule the meeting. Please try again."
+        else:
+            return f"I couldn't find any available slots for {target_date}. Please try a different date."
+
+
+
+def parse_specific_datetime(query):
+    """
+    Parse a specific date and time from the query.
+
+    Parameters:
+    query (str): The user's query.
+
+    Returns:
+    datetime or None: The parsed datetime if found, None otherwise.
+    """
+    # This is a simplified parser. You might want to use a more robust solution like dateutil.parser
+    date_formats = ["%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M", "%m/%d/%Y %H:%M"]
+    for format in date_formats:
+        try:
+            return datetime.strptime(query, format)
+        except ValueError:
+            pass
+    return None
+
+
+def cancel_meeting(query):
+    """
+    Cancel one or multiple meetings based on the user's query.
+
+    Parameters:
+    query (str): The user's query to cancel meetings.
+
+    Returns:
+    str: A message confirming the cancellation of meetings.
+    """
+    calendar = OutlookCalendar(CLIENT_ID, CLIENT_SECRET, TENANT_ID)
+
+    # Try to parse a specific date and time range from the query
+    start_time, end_time = parse_date_time_range(query)
+
+    if start_time and end_time:
+        # Cancel multiple meetings within a time range
+        events = calendar.get_calendar_events(start_time.isoformat(), end_time.isoformat())
+        canceled_count = 0
+        for event in events:
+            calendar.delete_event(event['id'])
+            canceled_count += 1
+        return f"Canceled {canceled_count} meeting(s) between {start_time} and {end_time}."
+    else:
+        # Try to find a single specific time
+        specific_time = parse_specific_datetime(query)
+        if specific_time:
+            events = calendar.get_calendar_events(specific_time.isoformat(), (specific_time + timedelta(minutes=1)).isoformat())
+            if events:
+                calendar.delete_event(events[0]['id'])
+                return f"Canceled the meeting at {specific_time}."
+            else:
+                return f"No meeting found at {specific_time}."
+        else:
+            return "Could not determine the time or time range for cancellation. Please provide a specific time or time range."
+
+def parse_date_time_range(query):
+    """
+    Parse a date and time range from the query.
+
+    Parameters:
+    query (str): The user's query.
+
+    Returns:
+    tuple: (start_time, end_time) as datetime objects, or (None, None) if parsing fails.
+    """
+    # This is a simplified parser. You might want to use a more robust solution like dateutil.parser
+    today = datetime.now().date()
+    
+    # Check for day keywords
+    if "today" in query.lower():
+        start_date = today
+    elif "tomorrow" in query.lower():
+        start_date = today + timedelta(days=1)
+    elif "friday" in query.lower():  # Add more days as needed
+        days_ahead = (4 - today.weekday()) % 7
+        start_date = today + timedelta(days=days_ahead)
+    else:
+        return None, None
+
+    # Try to extract time range
+    time_pattern = r'(\d{1,2}(?::\d{2})?\s*(?:am|pm))'
+    times = re.findall(time_pattern, query.lower())
+    
+    if len(times) == 2:
+        start_time = datetime.strptime(f"{start_date} {times[0]}", "%Y-%m-%d %I:%M%p")
+        end_time = datetime.strptime(f"{start_date} {times[1]}", "%Y-%m-%d %I:%M%p")
+        return start_time, end_time
+    
+    return None, None
 
 # Define tools for the AI to use
 tools = [
@@ -162,6 +298,44 @@ tools = [
                     }
                 },
                 "required": ["query", "meeting_length"]
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reschedule_meeting",
+            "description": "Reschedule a meeting based on the user's request.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The user's query to reschedule the meeting."
+                    },
+                    "meeting_id": {
+                        "type": "string",
+                        "description": "The ID of the meeting to be rescheduled."
+                    }
+                },
+                "required": ["query", "meeting_id"]
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cancel_meeting",
+            "description": "Cancel one or multiple meetings based on the user's request.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The user's query to cancel meetings."
+                    }
+                },
+                "required": ["query"]
             },
         },
     }
@@ -206,3 +380,17 @@ print(summary)
 # Call the function with the extracted arguments
 suggestion = suggest_meeting_time(function_args['query'], function_args['meeting_length'])
 print(suggestion)
+
+# Example of how to use the new function
+response = openai.ChatCompletion.create(
+    model="gpt-3.5-turbo",
+    messages=messages,
+    tools=tools,
+    tool_choice={"type": "function", "function": {"name": "reschedule_meeting"}},
+)
+
+tool_call = response.choices[0].message['tool_calls'][0].function
+function_args = json.loads(tool_call.arguments)
+
+rescheduling_result = reschedule_meeting(function_args['query'], function_args['meeting_id'])
+print(rescheduling_result)
