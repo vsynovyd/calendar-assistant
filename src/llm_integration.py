@@ -432,44 +432,45 @@ messages = [
      },
 ]
 
-# Get response from OpenAI
-response = openai.ChatCompletion.create(
-    model="gpt-3.5-turbo",
-    messages=messages,
-    tools=tools,
-    tool_choice={"type": "function", "function": {"name": "get_calendar_summary"}},
-)
 
-# Get response from OpenAI
-response = openai.ChatCompletion.create(
-    model="gpt-3.5-turbo",
-    messages=messages,
-    tools=tools,
-    tool_choice={"type": "function", "function": {"name": "suggest_meeting_time"}},
-)
+def process_user_query(user_query):
+    """
+    Process the user's query by determining the function to call and executing it.
+    
+    Parameters:
+    user_query (str): The user's input query.
+    
+    Returns:
+    str: The result of processing the query.
+    """
+    messages = [
+        {"role": "system", "content": "You are a helpful calendar assistant that determines which function to call based on the user's query."},
+        {"role": "user", "content": user_query}
+    ]
+    
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=messages,
+        tools=tools,
+        tool_choice="auto",
+    )
+    
+    if response.choices[0].message.get("tool_calls"):
+        function_name = response.choices[0].message["tool_calls"][0].function.name
+        function_args = json.loads(response.choices[0].message["tool_calls"][0].function.arguments)
+        
+        function_mapping = {
+            "get_calendar_summary": get_calendar_summary,
+            "suggest_meeting_time": lambda q: suggest_meeting_time(q, 60),  # Assuming 60 minutes as default
+            "reschedule_meeting": lambda q: reschedule_meeting(q, "placeholder_meeting_id"),  # You'll need to handle meeting_id
+            "cancel_meeting": cancel_meeting,
+            "schedule_event": schedule_event
+        }
+        
+        if function_name in function_mapping:
+            return function_mapping[function_name](function_args.get('query', user_query))
+        else:
+            return "I'm sorry, I couldn't determine how to handle that request."
+    else:
+        return "I'm sorry, I couldn't determine how to handle that request. Could you please rephrase?"
 
-# Extract function call details from the response
-tool_call = response.choices[0].message['tool_calls'][0].function
-function_args = json.loads(tool_call.arguments)
-
-# Call the function with the extracted arguments
-summary = get_calendar_summary(function_args['start_date'], function_args['end_date'])
-print(summary)
-
-# Call the function with the extracted arguments
-suggestion = suggest_meeting_time(function_args['query'], function_args['meeting_length'])
-print(suggestion)
-
-# Example of how to use the new function
-response = openai.ChatCompletion.create(
-    model="gpt-3.5-turbo",
-    messages=messages,
-    tools=tools,
-    tool_choice={"type": "function", "function": {"name": "reschedule_meeting"}},
-)
-
-tool_call = response.choices[0].message['tool_calls'][0].function
-function_args = json.loads(tool_call.arguments)
-
-rescheduling_result = reschedule_meeting(function_args['query'], function_args['meeting_id'])
-print(rescheduling_result)
